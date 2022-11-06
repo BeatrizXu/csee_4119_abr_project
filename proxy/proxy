@@ -1,0 +1,108 @@
+#!/usr/bin/env python3.10
+from socket import *
+import sys
+
+
+# proxy build a listening socket with the client
+def establishClientConnection(listenPort):
+    serverSocket = socket(AF_INET, SOCK_STREAM)
+    serverSocket.bind(('', listenPort))
+    # could handle multiple connections
+    serverSocket.listen(1000000)
+    return serverSocket
+
+
+# proxy build a socket for connecting with server and start three-times handshakes
+def establishServerConnection(port, serverIP, fakeIP):
+    clientSocket = socket(AF_INET, SOCK_STREAM)
+    clientSocket.bind((fakeIP, 0))
+    try:
+        clientSocket.connect((serverIP, port))
+    except:
+        print("the server is already been closed")
+        return None
+    return clientSocket
+
+
+def forwardProtocols(connectionSocket, clientSocket):
+    # proxy receive multiple messages from the clients
+    body = receiveMessages(connectionSocket)
+    if len(body) == 0:
+        print("connection error")
+        return False
+    print("From clients to proxy with message: " + str(body[:-1]))
+    connection = sendAndGetReply(body, clientSocket, connectionSocket)
+    return True and connection
+
+
+# the socket send messages to proxy
+# As there could be multiple lines with very large size, we need to handle carefully
+def receiveMessages(socket):
+    buffer = []
+    BUFF_SIZE = 4096
+    while True:
+        try:
+            data = socket.recv(BUFF_SIZE)
+        except:
+            break
+        buffer.append(data)
+        if data.decode()[-1] == '\n':
+            break
+    message = b''.join(buffer)
+    body = message.decode()
+    return body
+
+
+# the proxy only forward one message at a time and wait for response
+def sendAndGetReply(body, clientSocket, connectionSocket):
+    # proxy send a message to the server
+    print("From proxy to server with message: " + body[:-1])
+    try:
+        clientSocket.send(body.encode())
+    except:
+        print("connection error")
+        return False
+        # connection error event here, maybe reconnect
+    # proxy received messages from the server
+    replies = receiveMessages(clientSocket)
+    if len(replies) == 0:
+        print("connection error")
+        return False
+    print("From server to proxy with message: " + str(replies[:-1]))
+    try:
+        connectionSocket.send(replies.encode())
+    except:
+        print("connection error")
+        return False
+    print("From proxy to client with message: " + str(replies[:-1]))
+    return True
+
+
+if __name__ == '__main__':
+    print(sys.argv)
+    serverName = 'localhost'
+    serverPort = 8080
+    arguments = sys.argv
+    listenPort = int(arguments[1])
+    fakeIP = arguments[2]
+    serverIP = arguments[3]
+    # proxy acts like a server: build listening socket with clients
+    serverSocket = establishClientConnection(listenPort)
+
+    while True:
+        # get a connection with a client
+        connectionSocket, addr = serverSocket.accept()
+        # proxy acts like a client:  build connection with servers
+        clientSocket = establishServerConnection(serverPort, serverIP, fakeIP)
+        if clientSocket is None:
+            connectionSocket.close()
+            continue
+        while True:
+            # proxy handle multiple requests with a client
+            forward = forwardProtocols(connectionSocket, clientSocket)
+            if not forward:
+                break
+        print("previous client and server disconnected")
+        connectionSocket.close()
+        clientSocket.close()
+
